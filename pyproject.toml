@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cyclingml"
+version = "0.1.0"
+description = "Machine learning for road cycling: rider-type profiling, training-response modelling, pacing and pro-level placement."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Kevin-Andrei Petras" }]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "pyarrow>=14",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "pyyaml>=6",
+    "fitdecode>=0.10",
+    "gpxpy>=1.6",
+]
+
+[project.optional-dependencies]
+track = ["mlflow>=2.12"]
+ml = ["lightgbm>=4.3", "optuna>=3.6", "shap>=0.45"]
+app = ["streamlit>=1.35", "plotly>=5.20"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5", "pre-commit>=3.7"]
+all = ["cyclingml[track,ml,app,dev]"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cyclingml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

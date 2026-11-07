@@ -1,0 +1,28 @@
+# Data never goes in Git (personal data, large files)
+data/*
+!data/.gitkeep
+mlruns/
+*.fit
+*.FIT
+*.gpx
+*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Notebooks / editors
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+.env

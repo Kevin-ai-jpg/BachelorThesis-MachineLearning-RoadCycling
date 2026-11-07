@@ -1,0 +1,7 @@
+# Dummy experiment used to check the setup (task 0.5).
+# Run:  python -m cyclingml.smoke configs/smoke.yaml
+experiment: smoke-test
+seed: 42
+model:
+  name: dummy
+  k: 3
