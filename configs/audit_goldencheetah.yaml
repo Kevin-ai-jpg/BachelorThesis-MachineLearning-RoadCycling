@@ -1,0 +1,13 @@
+# Task 1.2: GoldenCheetah OpenData audit thresholds.
+experiment: data-audit
+audit:
+  min_power_rides: 100        # bike activities with power, per rider
+  min_span_days: 180          # first to last power ride
+  weight_range_kg: [40, 130]
+  suspect_default_weights: [75.0]   # checked as a possible profile default, not assumed
+  max_plausible_w:
+    mmp_5s_w: 2500
+    mmp_1m_w: 1200
+    mmp_5m_w: 650
+    mmp_20m_w: 550
+  gate_min_riders: 500        # Gate 1 in the plan
