@@ -5,6 +5,16 @@ experiments; Claude writes the code. The plan with task numbers lives in the cla
 "ThesisProjectApplication" (doc: "Thesis App Plan: ML for Road Cycling"). Branch names and pull
 requests reference the task number, e.g. `task-2.3-power-curve`.
 
+## How Kevin works (read first)
+- **Experiment first, code second.** Kevin wants fast, trustworthy answers to decide on, not polished
+  code. Answer with the result and a recommendation in a few lines; details on request.
+- **Learn when frozen.** A module is learned (`/learn`) once Kevin is ≥ 85% sure it stays in the app.
+  Status lives in `docs/module_status.md`; decisions in `docs/decisions.md` (via `/decide`).
+- **Skills:** `/next` (what now) · `/experiment <question>` · `/results <experiment>` ·
+  `/decide <decision>` · `/learn <module>`. Agent `leakage-reviewer` checks results before trusting them.
+- Long runs (> ~10 min) go to Kevin's laptop overnight, Kaggle or Colab: give the exact command.
+- Every experiment leaves a result card in `docs/experiments/`: these feed the thesis results chapter.
+
 ## Goal
 A Streamlit demo (end of February 2027) that takes a rider's Garmin/Strava export and shows:
 rider type (clustering), a training recommendation (training-response model), a pacing plan, and
@@ -19,7 +29,7 @@ Priority if time is short: rigorous ML evaluation over UI polish.
 - `configs/` one YAML per experiment · `notebooks/` Colab notebooks · `app/` Streamlit
 - `reference/` small versioned CSVs (pro power profiles), every row cites its paper
 - `data/` never committed (personal data, large files)
-- `docs/decisions.md` decisions log — append when a choice is made
+- `docs/decisions.md` decisions log · `docs/module_status.md` module status · `docs/experiments/` result cards · `docs/learning/` study notes
 
 ## Commands
 ```
@@ -27,6 +37,7 @@ pip install -e ".[dev,track]"        # add ml,app as needed, or .[all]
 pytest                                # tests
 ruff check . && ruff format .         # lint + format (CI fails otherwise)
 python -m cyclingml.smoke configs/smoke.yaml   # setup check, logs one MLflow run
+python -m cyclingml.runs <experiment> --metric <m>   # compare runs
 mlflow ui --backend-store-uri sqlite:///data/mlruns/mlflow.db
 ```
 
