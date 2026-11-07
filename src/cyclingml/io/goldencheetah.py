@@ -22,6 +22,7 @@ which the data audit (notebooks/02_data_audit.ipynb) reads.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import logging
 import math
@@ -90,6 +91,9 @@ RIDE_SAMPLE_COLUMNS = ["time_s", "power_w", "hr_bpm", "cadence_rpm", "speed_mps"
                        "altitude_m", "distance_m"]  # fmt: skip
 
 _SPAWN = multiprocessing.get_context("spawn")
+# "Transport endpoint is not connected", I/O error, stale handle, timeout: storage, not data
+_STORAGE_ERRNOS = {errno.ENOTCONN, errno.EIO, errno.ESTALE, errno.ETIMEDOUT}
+_STORAGE_PREFIX = "STORAGE: "
 _SENTINEL = -255.0  # GoldenCheetah's "not available"
 _FILENAME_RE = re.compile(r"(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})\.csv$")
 
@@ -229,8 +233,16 @@ def _index_one(path: str) -> tuple[dict | None, pd.DataFrame | None, str | None]
     try:
         athlete, rides = ride_table(path)
         return athlete, rides, None
+    except OSError as e:
+        if e.errno in _STORAGE_ERRNOS or not Path(path).parent.exists():
+            return None, None, f"{_STORAGE_PREFIX}{e}"  # the disk went away, not the zip's fault
+        return None, None, f"{type(e).__name__}: {e}"
     except Exception as e:  # corrupt zip or JSON: record and move on
         return None, None, f"{type(e).__name__}: {e}"
+
+
+class StorageError(RuntimeError):
+    """The data folder became unreachable (e.g. Google Drive disconnected in Colab)."""
 
 
 def _read_progress(path: Path) -> dict[str, tuple[str, str]]:
@@ -269,7 +281,8 @@ def build_index(
     rides_dir.mkdir(parents=True, exist_ok=True)
     ath_dir.mkdir(parents=True, exist_ok=True)
 
-    done = _read_progress(progress)
+    # only successfully indexed zips count as done: earlier errors are retried every run
+    done = {n for n, (st, _) in _read_progress(progress).items() if st == "ok"}
     all_zips = sorted(zip_dir.glob("*.zip"))
     todo = [z for z in all_zips if z.name not in done]
     existing = [int(p.stem.split("-")[1]) for p in ath_dir.glob("part-*.parquet")]
@@ -300,7 +313,33 @@ def build_index(
     def record_error(name: str, msg: str) -> None:
         log_progress([f"{name}\terror\t{msg.replace(chr(9), ' ').replace(chr(10), ' ')}"])
 
-    remaining, w = list(todo), workers
+    def handle(z: Path, athlete: dict | None, rides: pd.DataFrame | None, err: str | None) -> None:
+        nonlocal new
+        new += 1
+        if err and err.startswith(_STORAGE_PREFIX):
+            flush()  # keep everything indexed so far
+            raise StorageError(
+                f"data folder unreachable while reading {z.name}: "
+                f"{err[len(_STORAGE_PREFIX) :]}. Reconnect (remount Drive) and run "
+                "the same command again: it resumes where it stopped."
+            )
+        if err:
+            record_error(z.name, err)
+        else:
+            ath_buf.append(athlete)
+            rides_buf.append(rides)
+        if len(ath_buf) >= batch:
+            flush()
+        if new % 200 == 0:
+            log.info("indexed %d/%d new zips", new, len(todo))
+
+    if workers <= 0:  # in-process, one zip at a time (debugging, tests)
+        for z in todo:
+            handle(z, *_index_one(str(z)))
+        remaining: list[Path] = []
+    else:
+        remaining = list(todo)
+    w = max(workers, 1)
     while remaining:
         handled: set[Path] = set()
         try:
@@ -309,18 +348,9 @@ def build_index(
                 futures = {pool.submit(_index_one, str(z)): z for z in remaining}
                 for fut in as_completed(futures):
                     z = futures[fut]
-                    athlete, rides, err = fut.result()
+                    result = fut.result()
                     handled.add(z)
-                    new += 1
-                    if err:
-                        record_error(z.name, err)
-                    else:
-                        ath_buf.append(athlete)
-                        rides_buf.append(rides)
-                    if len(ath_buf) >= batch:
-                        flush()
-                    if new % 200 == 0:
-                        log.info("indexed %d/%d new zips", new, len(todo))
+                    handle(z, *result)
             remaining = []
         except BrokenProcessPool:
             flush()
@@ -374,11 +404,15 @@ def main(argv: list[str] | None = None) -> None:
     pi = sub.add_parser("index")
     pi.add_argument("--zips", type=Path, required=True)
     pi.add_argument("--out", type=Path, required=True)
-    pi.add_argument("--workers", type=int, default=2)
+    pi.add_argument("--workers", type=int, default=2, help="0 = no subprocesses")
     pi.add_argument("--rebuild", action="store_true", help="start over instead of resuming")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    print(build_index(args.zips, args.out, args.workers, rebuild=args.rebuild))
+    try:
+        print(build_index(args.zips, args.out, args.workers, rebuild=args.rebuild))
+    except (StorageError, OSError) as e:
+        print(f"STOPPED: {e}")
+        raise SystemExit(3) from e
 
 
 if __name__ == "__main__":
