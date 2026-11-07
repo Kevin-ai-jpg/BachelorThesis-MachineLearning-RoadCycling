@@ -18,6 +18,7 @@ dependencies = [
     "pyyaml>=6",
     "fitdecode>=0.10",
     "gpxpy>=1.6",
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
