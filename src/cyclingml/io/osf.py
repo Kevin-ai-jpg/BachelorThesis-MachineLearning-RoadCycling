@@ -26,6 +26,7 @@ import csv
 import hashlib
 import logging
 import os
+import threading
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -66,31 +67,88 @@ def make_session(token: str | None = None) -> requests.Session:
     return s
 
 
+class Throttle:
+    """Shared pacing for all download threads.
+
+    OSF answers HTTP 429 when we ask too fast. Waiting per thread does not help: the other
+    threads keep asking. So every request first waits here: requests are spaced at least
+    `min_interval` seconds apart, and after any 429 *all* threads pause until the cooldown ends.
+    """
+
+    def __init__(self, min_interval: float = 0.5) -> None:
+        self.min_interval = min_interval
+        self._lock = threading.Lock()
+        self._next_slot = 0.0
+        self._cooldown_until = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_slot, self._cooldown_until)
+            self._next_slot = start + self.min_interval
+        time.sleep(max(0.0, start - time.monotonic()))
+
+    def cool_down(self, seconds: float) -> bool:
+        """Pause all threads for `seconds`. True if this started or extended the pause."""
+        with self._lock:
+            until = time.monotonic() + seconds
+            if until <= self._cooldown_until:
+                return False
+            self._cooldown_until = until
+            return True
+
+
+THROTTLE = Throttle()
+
+
 def _get(
-    session: requests.Session, url: str, *, stream: bool = False, retries: int = 6, **kw: Any
+    session: requests.Session,
+    url: str,
+    *,
+    stream: bool = False,
+    retries: int = 5,
+    rate_limit_retries: int = 15,
+    throttle: Throttle | None = None,
+    **kw: Any,
 ) -> requests.Response:
-    """GET with retries: backs off on 429 (rate limit) and 5xx, honouring Retry-After."""
-    delay = 2.0
-    for attempt in range(retries + 1):
+    """GET with retries.
+
+    Rate limits (429) pause every thread through the shared throttle and are retried up to
+    `rate_limit_retries` times (delays double up to 5 min, ~45 min in total), because they
+    always clear eventually. Network errors and 5xx get `retries` attempts.
+    """
+    throttle = throttle or THROTTLE
+    delay, limited, failed = 2.0, 0, 0
+    while True:
+        throttle.wait()
         try:
             r = session.get(url, stream=stream, timeout=60, **kw)
         except (requests.ConnectionError, requests.Timeout) as e:
-            if attempt == retries:
+            failed += 1
+            if failed > retries:
                 raise
             log.warning("network error %s, retrying in %.0fs", e, delay)
+            time.sleep(delay)
         else:
             if r.status_code < 400:
                 return r
-            if r.status_code != 429 and r.status_code < 500:
+            if r.status_code == 429:
+                limited += 1
+                if limited > rate_limit_retries:
+                    r.raise_for_status()
+                wait = r.headers.get("Retry-After")
+                pause = float(wait) if wait and wait.isdigit() else delay
+                if throttle.cool_down(pause):  # log once per pause, not once per thread
+                    log.warning("rate limited (429), all downloads pause %.0fs", pause)
+            elif r.status_code >= 500:
+                failed += 1
+                if failed > retries:
+                    r.raise_for_status()
+                log.warning("HTTP %s on %s, retrying in %.0fs", r.status_code, url, delay)
+                time.sleep(delay)
+            else:
                 r.raise_for_status()
-            if attempt == retries:
-                r.raise_for_status()
-            wait = r.headers.get("Retry-After")
-            delay = float(wait) if wait and wait.isdigit() else delay
-            log.warning("HTTP %s on %s, retrying in %.0fs", r.status_code, url, delay)
-        time.sleep(delay)
         delay = min(delay * 2, 300)
-    raise RuntimeError("unreachable")
 
 
 def _paged(session: requests.Session, url: str) -> Iterator[dict]:
@@ -242,6 +300,7 @@ def download(
     session = session or make_session()
     counts = {"downloaded": 0, "skipped": 0, "failed": 0}
     failed_log = dest / "failed.txt"
+    failed_log.unlink(missing_ok=True)  # only this run's failures
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(download_one, session, rf, dest): rf for rf in todo}
         for i, fut in enumerate(as_completed(futures), 1):
@@ -271,7 +330,10 @@ def main(argv: list[str] | None = None) -> None:
     pd.add_argument("--manifest", type=Path, required=True)
     pd.add_argument("--dest", type=Path, required=True)
     pd.add_argument("--limit", type=int, default=None, help="only the first N files")
-    pd.add_argument("--workers", type=int, default=4)
+    pd.add_argument("--workers", type=int, default=3)
+    pd.add_argument(
+        "--min-interval", type=float, default=0.5, help="seconds between requests (all threads)"
+    )
     pd.add_argument("--suffix", default=".zip", help="file suffix to download ('' = all)")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -281,6 +343,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Wrote {n} entries to {args.out}\n")
         print(summarize(read_manifest(args.out)))
     else:
+        THROTTLE.min_interval = args.min_interval
         counts = download(
             read_manifest(args.manifest), args.dest, args.workers, args.limit, args.suffix
         )
