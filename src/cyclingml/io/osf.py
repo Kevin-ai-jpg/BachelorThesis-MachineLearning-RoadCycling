@@ -88,9 +88,14 @@ class Throttle:
             self._next_slot = start + self.min_interval
         time.sleep(max(0.0, start - time.monotonic()))
 
-    def cool_down(self, seconds: float) -> None:
+    def cool_down(self, seconds: float) -> bool:
+        """Pause all threads for `seconds`. True if this started or extended the pause."""
         with self._lock:
-            self._cooldown_until = max(self._cooldown_until, time.monotonic() + seconds)
+            until = time.monotonic() + seconds
+            if until <= self._cooldown_until:
+                return False
+            self._cooldown_until = until
+            return True
 
 
 THROTTLE = Throttle()
@@ -133,8 +138,8 @@ def _get(
                     r.raise_for_status()
                 wait = r.headers.get("Retry-After")
                 pause = float(wait) if wait and wait.isdigit() else delay
-                log.warning("rate limited (429), all downloads pause %.0fs", pause)
-                throttle.cool_down(pause)
+                if throttle.cool_down(pause):  # log once per pause, not once per thread
+                    log.warning("rate limited (429), all downloads pause %.0fs", pause)
             elif r.status_code >= 500:
                 failed += 1
                 if failed > retries:
@@ -295,6 +300,7 @@ def download(
     session = session or make_session()
     counts = {"downloaded": 0, "skipped": 0, "failed": 0}
     failed_log = dest / "failed.txt"
+    failed_log.unlink(missing_ok=True)  # only this run's failures
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(download_one, session, rf, dest): rf for rf in todo}
         for i, fut in enumerate(as_completed(futures), 1):

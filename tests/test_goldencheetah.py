@@ -75,7 +75,7 @@ def test_build_index_and_audit(tmp_path):
     (zips / "broken.zip").write_bytes(b"not a zip")
     out = tmp_path / "index"
     summary = gc.build_index(zips, out, workers=1)
-    assert summary == {"zips": 2, "athletes": 1, "errors": 1, "parts": 1}
+    assert summary == {"zips": 2, "new": 2, "skipped": 0, "athletes": 1, "errors": 1}
     assert "broken.zip" in (out / "index_errors.txt").read_text()
 
     athletes, rides = gc.load_index(out)
@@ -104,3 +104,29 @@ def test_audit_flags_default_weight(tmp_path):
     res = run_audit(athletes, rides, AuditConfig(min_power_rides=1, min_span_days=0))
     assert res["weight"]["power_rides_weight_suspect_default"] == 1.0
     assert not res["per_rider"].iloc[0]["weight_usable"]
+
+
+def test_build_index_resumes_and_rebuilds(tmp_path):
+    zips = tmp_path / "zips"
+    zips.mkdir()
+    make_athlete_zip(zips / "a.zip", n_power_rides=2)
+    out = tmp_path / "index"
+    gc.build_index(zips, out, workers=1)
+    make_athlete_zip(zips / "b.zip", n_power_rides=3)  # arrives later, e.g. download resumed
+    summary = gc.build_index(zips, out, workers=1)
+    assert summary == {"zips": 2, "new": 1, "skipped": 1, "athletes": 2, "errors": 0}
+    athletes, rides = gc.load_index(out)
+    assert sorted(athletes["zip_name"]) == ["a.zip", "b.zip"] and len(rides) == 4 + 5
+    again = gc.build_index(zips, out, workers=1, rebuild=True)
+    assert again["new"] == 2 and again["athletes"] == 2
+
+
+def test_build_index_survives_worker_crash(tmp_path, monkeypatch):
+    zips = tmp_path / "zips"
+    zips.mkdir()
+    for name in ("a.zip", "b.zip", "c.zip"):
+        make_athlete_zip(zips / name, n_power_rides=2)
+    monkeypatch.setenv("CYCLINGML_TEST_CRASH_ON", "b.zip")  # worker dies like an OOM kill
+    summary = gc.build_index(zips, tmp_path / "index", workers=2, batch=1)
+    assert summary["athletes"] == 2 and summary["errors"] == 1
+    assert "b.zip\tworker crashed" in (tmp_path / "index" / "index_errors.txt").read_text()
