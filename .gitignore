@@ -22,7 +22,14 @@ htmlcov/
 
 # Notebooks / editors
 .ipynb_checkpoints/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
 .DS_Store
 .env
+
+# Claude Code personal files
+CLAUDE.local.md
+.claude/settings.local.json
+notebooks/scratch/
