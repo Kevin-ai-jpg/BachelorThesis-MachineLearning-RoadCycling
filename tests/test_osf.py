@@ -124,3 +124,39 @@ def test_download_verifies_checksums_and_resumes(tmp_path):
 def test_token_header(monkeypatch):
     monkeypatch.setenv("OSF_TOKEN", "abc")
     assert osf.make_session().headers["Authorization"] == "Bearer abc"
+
+
+def test_rate_limit_pauses_all_threads_and_eventually_succeeds():
+    t = osf.Throttle(min_interval=0.0)
+    calls = {"n": 0}
+
+    class Flaky:
+        headers = {}
+
+        def get(self, url, **kw):
+            calls["n"] += 1
+            return FakeResponse(429) if calls["n"] <= 8 else FakeResponse(json_body={"ok": 1})
+
+    r = osf._get(Flaky(), "https://x", throttle=t)  # 8 rate limits > old limit of 6
+    assert r.json() == {"ok": 1}
+    assert t._cooldown_until > 0  # the pause was shared
+
+
+def test_rate_limit_gives_up_after_limit():
+    class Always429:
+        headers = {}
+
+        def get(self, url, **kw):
+            return FakeResponse(429)
+
+    with pytest.raises(requests.HTTPError):
+        osf._get(Always429(), "https://x", throttle=osf.Throttle(0.0), rate_limit_retries=3)
+
+
+def test_throttle_spaces_requests(monkeypatch):
+    slept = []
+    monkeypatch.setattr(osf.time, "sleep", lambda s: slept.append(s))
+    t = osf.Throttle(min_interval=1.0)
+    for _ in range(3):
+        t.wait()
+    assert slept[-1] > 1.5  # third request waits about two intervals
