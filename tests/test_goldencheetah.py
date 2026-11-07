@@ -1,5 +1,7 @@
+import errno
 import math
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -130,3 +132,38 @@ def test_build_index_survives_worker_crash(tmp_path, monkeypatch):
     summary = gc.build_index(zips, tmp_path / "index", workers=2, batch=1)
     assert summary["athletes"] == 2 and summary["errors"] == 1
     assert "b.zip\tworker crashed" in (tmp_path / "index" / "index_errors.txt").read_text()
+
+
+def test_storage_errors_stop_the_run_and_keep_progress(tmp_path, monkeypatch):
+    zips = tmp_path / "zips"
+    zips.mkdir()
+    for name in ("a.zip", "b.zip", "c.zip"):
+        make_athlete_zip(zips / name, n_power_rides=2)
+    real = gc.ride_table
+
+    def flaky(path):
+        if Path(path).name == "c.zip":
+            raise OSError(errno.ENOTCONN, "Transport endpoint is not connected")
+        return real(path)
+
+    monkeypatch.setattr(gc, "ride_table", flaky)
+    out = tmp_path / "index"
+    with pytest.raises(gc.StorageError, match="run the same command again"):
+        gc.build_index(zips, out, workers=0)
+    # a and b were saved; c was NOT recorded as a bad zip
+    assert "c.zip" not in (out / "progress.tsv").read_text()
+    monkeypatch.setattr(gc, "ride_table", real)
+    summary = gc.build_index(zips, out, workers=0)
+    assert summary["new"] == 1 and summary["athletes"] == 3 and summary["errors"] == 0
+
+
+def test_errors_are_retried_on_next_run(tmp_path):
+    zips = tmp_path / "zips"
+    zips.mkdir()
+    make_athlete_zip(zips / "a.zip", n_power_rides=2)
+    (zips / "b.zip").write_bytes(b"truncated")
+    out = tmp_path / "index"
+    assert gc.build_index(zips, out, workers=1)["errors"] == 1
+    make_athlete_zip(zips / "b.zip", n_power_rides=2)  # re-downloaded, now fine
+    summary = gc.build_index(zips, out, workers=1)
+    assert summary["new"] == 1 and summary["athletes"] == 2 and summary["errors"] == 0
