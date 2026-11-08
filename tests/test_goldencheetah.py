@@ -167,3 +167,39 @@ def test_errors_are_retried_on_next_run(tmp_path):
     make_athlete_zip(zips / "b.zip", n_power_rides=2)  # re-downloaded, now fine
     summary = gc.build_index(zips, out, workers=1)
     assert summary["new"] == 1 and summary["athletes"] == 2 and summary["errors"] == 0
+
+
+def test_impossible_dates_are_dropped(tmp_path):
+    import json
+    import zipfile
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    # reader: a year-1 activity in the metadata is skipped
+    z = make_athlete_zip(tmp_path / "a.zip", n_power_rides=2)
+    with zipfile.ZipFile(z) as zf:
+        name = [n for n in zf.namelist() if n.endswith(".json")][0]
+        meta = json.loads(zf.read(name))
+    meta["RIDES"][0]["date"] = "0001/01/01 00:00:00 UTC"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr(name, json.dumps(meta))
+    _, rides = gc.ride_table(z)
+    assert len(rides) == 3  # 4 activities, the year-1 one skipped
+
+    # loader: an index built before this fix, with a year-1 row in a part, still loads
+    out = tmp_path / "index"
+    (out / "rides").mkdir(parents=True)
+    pd.DataFrame({"athlete_id": ["x"], "zip_name": ["x.zip"]}).to_parquet(out / "athletes.parquet")
+    utc = timezone.utc
+    ts = pa.array([datetime(1, 1, 1, tzinfo=utc), datetime(2020, 5, 1, tzinfo=utc)],
+                  type=pa.timestamp("us", tz="UTC"))  # fmt: skip
+    pq.write_table(pa.table({"athlete_id": ["x", "x"], "start_utc": ts}),
+                   out / "rides" / "part-00000.parquet")  # fmt: skip
+    # plus a normal part written by pandas: mixing the two used to crash pd.concat on pandas 2
+    pd.DataFrame({"athlete_id": ["y"], "start_utc": [datetime(2019, 1, 1, tzinfo=utc)]}).to_parquet(
+        out / "rides" / "part-00001.parquet", index=False
+    )
+    _, rides = gc.load_index(out)
+    assert len(rides) == 2 and rides.attrs["dropped_bad_dates"] == 1
+    assert sorted(rides["start_utc"].dt.year) == [2019, 2020]

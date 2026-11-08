@@ -40,6 +40,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +97,8 @@ _SPAWN = multiprocessing.get_context("spawn")
 # "Transport endpoint is not connected", I/O error, stale handle, timeout: storage, not data
 _STORAGE_ERRNOS = {errno.ENOTCONN, errno.EIO, errno.ESTALE, errno.ETIMEDOUT}
 _STORAGE_PREFIX = "STORAGE: "
+# Activities outside this window come from broken device clocks and are ignored.
+VALID_DATES = (datetime(1990, 1, 1, tzinfo=timezone.utc), datetime(2030, 1, 1, tzinfo=timezone.utc))
 _SENTINEL = -255.0  # GoldenCheetah's "not available"
 _FILENAME_RE = re.compile(r"(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})\.csv$")
 
@@ -177,6 +182,8 @@ def ride_table(zip_path: str | Path) -> tuple[dict, pd.DataFrame]:
             start = parse_date(ride["date"])
         except (KeyError, ValueError):
             continue
+        if not (VALID_DATES[0] <= start <= VALID_DATES[1]):
+            continue  # broken device clock, e.g. year 1 or 2099
         flags = ride.get("data", "") or ""
         m = ride.get("METRICS", {}) or {}
         row = {
@@ -386,15 +393,34 @@ def build_index(
     }
 
 
+def _read_rides_part(path: Path) -> tuple[pd.DataFrame, int]:
+    """Read one rides part, dropping activities with impossible start dates.
+
+    Filtering happens in Arrow, before pandas sees the column: some pandas versions store
+    timestamps in nanoseconds and cannot even represent a year-1 date (OutOfBoundsDatetime).
+    """
+    table = pq.read_table(path)
+    col = table.column("start_utc")
+    lo = pa.scalar(VALID_DATES[0], type=col.type)
+    hi = pa.scalar(VALID_DATES[1], type=col.type)
+    keep = pc.and_(pc.greater_equal(col, lo), pc.less_equal(col, hi))
+    kept = table.filter(keep)
+    return kept.to_pandas(), table.num_rows - kept.num_rows
+
+
 def load_index(out_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     out_dir = Path(out_dir)
     athletes = pd.read_parquet(out_dir / "athletes.parquet")
     parts = sorted((out_dir / "rides").glob("part-*.parquet"))
-    rides = (
-        pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
-        if parts
-        else pd.DataFrame()
-    )
+    frames, dropped = [], 0
+    for p in parts:
+        df, n_bad = _read_rides_part(p)
+        frames.append(df)
+        dropped += n_bad
+    if dropped:
+        log.warning("dropped %d activities with impossible dates", dropped)
+    rides = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    rides.attrs["dropped_bad_dates"] = dropped
     return athletes, rides
 
 
