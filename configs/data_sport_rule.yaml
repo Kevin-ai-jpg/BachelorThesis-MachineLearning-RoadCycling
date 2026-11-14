@@ -1,0 +1,29 @@
+# D3: which unlabelled GoldenCheetah activities are rides?
+experiment: data-audit
+index_dir: raw/goldencheetah/index      # relative to $CYCLINGML_DATA
+seed: 42
+test_share: 0.5                          # share of riders held out (split by rider)
+labels:
+  # sport labels (lower case, stripped) that mean cycling: the audit's list plus missed ones
+  bike: [bike, biking, cycling, ride, turbo, virtualride, mtb, road, rennrad, mountain bike,
+         bdc, rolle, rollers, ergo-walze, cx, crossrad, cykling, rennvelo, road bike, kickr,
+         wahoo kickr, spinning, strada, morning ride, lunch ride, afternoon ride, evening ride,
+         gravel, gravel ride, velo, vélo, radfahren, fietsen, cyclisme]
+  # labels that are certainly not cycling (negatives for evaluation)
+  nonbike: [run, running, laufen, afternoon run, morning run, evening run, lunch run, trail run,
+            swim, walk, walking, hike, hiking, rowing, row, rowerg, skierg, nordicski,
+            cross country skiing, alpineski, elliptical, weighttraining, strength]
+  # everything else (empty label, "Workout", "Race", "Other", "EBikeRide", ...) is "unknown"
+rule:
+  min_avg_power_w: 1
+  cadence_range_rpm: [40, 130]          # average cadence, NaN allowed (no sensor)
+  speed_max_mps: 20                     # average moving speed; above = car/GPS error
+  # grid searched on TRAIN riders only: highest recall with precision >= target
+  grid:
+    speed_min_mps: [3.5, 4.0, 4.5, 5.0, 5.5]
+    allow_indoor: [true, false]         # speed missing or < indoor_speed_mps -> accept
+  indoor_speed_mps: 0.5
+  precision_target: 0.99
+tree:
+  max_depth: 4
+  min_samples_leaf: 200
