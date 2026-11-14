@@ -12,7 +12,8 @@ Status: `exploring` → `candidate` → `frozen`. Updated by `/decide`.
 | Pro reference tables | 1.3 | not started | | Waiting for PDFs | no |
 | PCS scraper | 1.4 | not started | | | no |
 | Amateur intake + anonymiser | 1.5 | not started | | | no |
-| Features (power curve, CP, load, durability) | 2.x | not started | | | no |
+| Activity readers (FIT/GPX/TCX) + cleaning | 2.1–2.2 | candidate | Own readers, 1 Hz, D4 rules in configs/clean_rides.yaml | 6 GC riders: matches GC on normal riders (`2026-11-14-power-curve-vs-goldencheetah.md`) | no |
+| Features (power curve, CP, load, durability) | 2.x | exploring | Power curve: prefix sums, 1 s–3 h, rolling 90-day best | Same card; open: sustained power-meter noise (D8) | no |
 | Rider-type profiling | 3.x | not started | | | no |
 | Training-response model | 4.x | not started | | | no |
 | Pacing | 5.1–5.3 | not started | | | no |
