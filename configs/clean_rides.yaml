@@ -1,0 +1,17 @@
+# Tasks 2.2-2.3: cleaning rules (decision D4) and power-curve settings.
+# Read by cyclingml.clean.ride.CleanConfig and cyclingml.rider.
+experiment: features
+clean:
+  min_duration_s: 300            # shorter activities are not training rides
+  max_duration_h: 12             # D4: longer = broken clock or device left running
+  max_power_w: 2500              # above the best pro sprint peaks; higher = sensor error
+  spike_window_s: 7              # centred rolling-median window for spike detection
+  spike_delta_w: 700             # sample this far above the window median = spike
+  hr_range_bpm: [30, 230]
+  max_cadence_rpm: 200
+  max_speed_mps: 33              # ~120 km/h, above any descent; faster = car or GPS error
+  max_impossible_speed_share: 0.01   # D4: drop the activity if more samples are faster
+  max_fill_gap_s: 5              # interpolate gaps up to 5 s; longer = stop / dropout
+power_curve:
+  rolling_window_days: 90
+  min_power_share: 0.5           # activity counts as a power ride if >= 50% of seconds have power
